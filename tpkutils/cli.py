@@ -6,6 +6,11 @@ import click
 import pkg_resources
 import webbrowser
 
+import fiona
+from shapely.ops import unary_union, transform
+from shapely.geometry import shape
+import pyproj
+
 from tpkutils import TPK
 
 logger = logging.getLogger("tpkutils")
@@ -131,7 +136,9 @@ def mbtiles(
     help="Preview the exported tiles in a simple map.",
 )
 @click.option("-v", "--verbose", count=True, help="Verbose output")
-def disk(tpk_filename, path, zoom, scheme, drop_empty, path_format, preview, verbose):
+@click.option("--aoi", required=False, default=None, help="Area of interest features.")
+@click.option("--overwrite", is_flag=True, default=False, help='Overwrite existing export tiles.')
+def disk(tpk_filename, path, zoom, scheme, drop_empty, path_format, preview, verbose, aoi=None, overwrite=False):
     """Export the tile package to disk: z/x/y.<ext> or pattern specified using
     --path-format option.
 
@@ -143,7 +150,7 @@ def disk(tpk_filename, path, zoom, scheme, drop_empty, path_format, preview, ver
 
     configure_logging(verbose)
 
-    if os.path.exists(path) and len(os.listdir(path)) > 0:
+    if not overwrite and os.path.exists(path) and len(os.listdir(path)) > 0:
         raise click.ClickException("Output directory must be empty.")
 
     start = time.time()
@@ -151,8 +158,16 @@ def disk(tpk_filename, path, zoom, scheme, drop_empty, path_format, preview, ver
     if zoom is not None:
         zoom = [int(v) for v in zoom.split(",")]
 
+    if aoi:
+        with fiona.open(aoi) as l:
+            src_crs = pyproj.CRS(l.crs)
+            wgs_crs = pyproj.CRS('EPSG:4326')
+            project = pyproj.Transformer.from_crs(src_crs, wgs_crs, always_xy=True).transform
+            g = [shape(f['geometry']) for f in l]
+            aoi = transform(project, unary_union(g))
+
     with TPK(tpk_filename) as tpk:
-        tpk.to_disk(path, zoom, scheme, drop_empty, path_format)
+        tpk.to_disk(path, zoom, scheme, drop_empty, path_format, aoi=aoi, overwrite=overwrite)
 
         if preview:
             template_filename = os.path.join(

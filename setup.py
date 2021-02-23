@@ -12,7 +12,7 @@ setup(
     description="ArcGIS Tile Package Utilities",
     long_description_content_type="text/markdown",
     long_description=open("README.md").read(),
-    install_requires=["click", "pymbtiles>=0.5.0", "six", "mercantile"],
+    install_requires=["click", "pymbtiles>=0.5.0", "six", "mercantile", "fiona"],
     include_package_data=True,
     extras_require={"test": ["pytest", "pytest-cov"]},
     entry_points={"console_scripts": "tpk=tpkutils.cli:cli"},

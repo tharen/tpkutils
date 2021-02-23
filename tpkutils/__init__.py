@@ -24,6 +24,7 @@ from io import BytesIO
 from pymbtiles import MBtiles, Tile
 import mercantile
 
+from shapely.geometry import box
 
 logger = logging.getLogger("tpkutils")
 
@@ -45,6 +46,51 @@ EMPTY_TILES = {
     "147ca8bf480d89b17921e24e3c09edcf1cb2228b",  # completely transparent PNG
 }
 
+def num2deg(xtile, ytile, zoom):
+    """
+    Return latitude and longitude for the northwest corner of a tile.
+
+    Parameters
+    ----------
+    xtile: Tile column coordinate
+    ytile: Tile row coordinate
+    zoom: Tile zoom level
+
+    Returns
+    -------
+    tuple[float]: (latitude, longitude)
+
+    Reference
+    ---------
+    https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames#Tile_numbers_to_lon..2Flat._2
+    """
+    n = 2.0 ** zoom
+    lon_deg = xtile / n * 360.0 - 180.0
+    lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
+    lat_deg = math.degrees(lat_rad)
+    return (-lat_deg, lon_deg)
+
+def check_aoi(z,x,y,aoi):
+    """
+    Return True if a tile intersects an area of interest.
+
+    Parameters
+    ----------
+    z: Tile zoom level
+    x: Tile x coordinate
+    y: Tile y coordinate
+    aoi: Area of interest geometry
+
+    Returns
+    -------
+    bool: Tile AOI intersection state
+    """
+
+    b = mercantile.bounds(x, y, z)
+    tile = box(b[0],-b[1],b[2],-b[3])
+    # print(tile.bounds)
+
+    return tile.intersects(aoi)
 
 def buffer_to_offset(buffer):
     """
@@ -214,7 +260,7 @@ class TPK(object):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def read_tiles(self, zoom=None, flip_y=False):
+    def read_tiles(self, zoom=None, flip_y=False, aoi=None):
         """
         Read all non-empty tiles from tile package, optionally limited to zoom
         levels provided.
@@ -226,6 +272,9 @@ class TPK(object):
         flip_y: bool  (default False)
             if True, will return tiles in xyz tile scheme.  Otherwise will use
             ArcGIS scheme.
+        aoi: shapely geometry
+            Optional area of interest geometry. Tiles are returned only if 
+            they intersect the AOI. The AOI coordinates must be geographic (epsg:4326).
 
         Returns
         -------
@@ -287,8 +336,10 @@ class TPK(object):
                     if (0 <= x <= max_row_col) and (0 <= y <= max_row_col):
                         if flip_y:
                             y = max_row_col - y
+                        
+                        if (aoi is None) or check_aoi(z,x,y,aoi):
+                            yield Tile(z, x, y, data)
 
-                        yield Tile(z, x, y, data)
                     else:
                         logger.debug(
                             "Tile out of range, zoom level = {0}, column = {1}, row = {2}".format(
@@ -403,7 +454,9 @@ class TPK(object):
         scheme="arcgis",
         drop_empty=False,
         path_format="{z}/{x}/{y}.{ext}",
-    ):
+        aoi=None,
+        overwrite=False
+        ):
         """
         Export tile package to directory structure: z/x/y.<ext> where <ext> is
         png or jpg.  If output exists, this function will raise an IOError.
@@ -421,7 +474,8 @@ class TPK(object):
             if True, tiles that are empty will not be output
         path_format: string with format placeholders {z}, {x}, {y}, {ext}
             Format string must include z, x, y, ext parameters.
-
+        aoi: 
+        overwrite:
         """
 
         ext = self.format.lower().replace("jpeg", "jpg")
@@ -434,7 +488,7 @@ class TPK(object):
 
         if not os.path.exists(path):
             os.makedirs(path)
-        elif len(os.listdir(path)) > 0:
+        elif not overwrite and len(os.listdir(path)) > 0:
             raise IOError("Output directory must be empty.")
 
         if zoom is None:
@@ -445,7 +499,7 @@ class TPK(object):
         zoom = list(zoom)
         zoom.sort()
 
-        for tile in self.read_tiles(zoom, flip_y=(scheme == "xyz")):
+        for tile in self.read_tiles(zoom, flip_y=(scheme == "xyz"), aoi=aoi):
             if drop_empty and hashlib.sha1(tile.data).hexdigest() in EMPTY_TILES:
                 continue
 
